@@ -15,6 +15,14 @@
 #include "inode.h"
 #include "util.h"
 
+#define ID_INODE_DEFAULT 1
+#define QUANT_NUM_INODES 20
+// #define BLOCK_INODES 1
+
+FSInfo* fileSystem;
+int* emptyBlocks;
+int totalBlocks;
+
 //Declaracoes globais
 
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
@@ -30,8 +38,25 @@ int myFSIsIdle (Disk *d) {
 //retorna -1.
 int myFSFormat (Disk *d, unsigned int blockSize) {
 	if(d != NULL) {
-		int totalBlock = diskGetSize(d) / blockSize;
-		return totalBlock;
+		totalBlocks = diskGetNumSectors(d) / blockSize;
+		char* dataSystem = malloc(512);
+		memset(dataSystem,0,512);
+		snprintf(dataSystem, 512, "id:%c;name:%s;totalBlocks:%d", fileSystem->fsid, fileSystem->fsname, totalBlocks);
+		if(diskWriteSector(d,0,dataSystem) == -1) return -1; //escreve no setor zero as informações do file system
+		free(dataSystem);
+
+		char* value = malloc(512);
+		memset(value,0,512);
+		snprintf(value, 512, "0");
+		for(int i = 1; i < diskGetNumSectors(d); i++) {
+			if(diskWriteSector(d,i,value) == -1) return -1; //escreve zero em todos os setores do disco
+		}
+		free(value);
+
+		for(int i = 1; i <= QUANT_NUM_INODES; i++) {
+			if(inodeCreate(i, d) == NULL) return -1; //cria os 20 inodes e armazena no disco
+		}
+		return totalBlocks;
 	}
 	return -1;
 }
@@ -112,33 +137,33 @@ int myFSCloseDir (int fd) {
 //o sistema de arquivos tenha sido registrado com sucesso.
 //Caso contrario, retorna -1
 int installMyFS (void) {
-	FSInfo* infos_arquivos = malloc(sizeof(FSInfo));
+	fileSystem = malloc(sizeof(FSInfo));
 	char* name = "teste";
 	
-	infos_arquivos->fsid = 'S';
-	infos_arquivos->fsname = name;
-	infos_arquivos->isidleFn = myFSIsIdle;
-	infos_arquivos->formatFn = myFSFormat;
-	infos_arquivos->openFn = myFSOpen;
-	infos_arquivos->readFn = myFSRead;
-	infos_arquivos->writeFn = myFSWrite;
-	infos_arquivos->closeFn = myFSClose;
-	infos_arquivos->opendirFn = myFSOpenDir;
-	infos_arquivos->readdirFn = myFSReadDir;
-	infos_arquivos->linkFn = myFSLink;
-	infos_arquivos->unlinkFn = myFSUnlink;
-	infos_arquivos->closedirFn = myFSCloseDir;
+	fileSystem->fsid = 'S';
+	fileSystem->fsname = name;
+	fileSystem->isidleFn = myFSIsIdle;
+	fileSystem->formatFn = myFSFormat;
+	fileSystem->openFn = myFSOpen;
+	fileSystem->readFn = myFSRead;
+	fileSystem->writeFn = myFSWrite;
+	fileSystem->closeFn = myFSClose;
+	fileSystem->opendirFn = myFSOpenDir;
+	fileSystem->readdirFn = myFSReadDir;
+	fileSystem->linkFn = myFSLink;
+	fileSystem->unlinkFn = myFSUnlink;
+	fileSystem->closedirFn = myFSCloseDir;
 	
-	if(infos_arquivos->fsname == NULL || infos_arquivos->isidleFn == NULL || 
-		infos_arquivos->formatFn == NULL || infos_arquivos->openFn == NULL || infos_arquivos->readFn == NULL || 
-		infos_arquivos->writeFn == NULL || infos_arquivos->closeFn == NULL || infos_arquivos->opendirFn == NULL || 
-		infos_arquivos->readdirFn == NULL || infos_arquivos->linkFn == NULL || infos_arquivos->unlinkFn == NULL ||
-		infos_arquivos->closedirFn == NULL) {
+	if(fileSystem->fsname == NULL || fileSystem->isidleFn == NULL || 
+		fileSystem->formatFn == NULL || fileSystem->openFn == NULL || fileSystem->readFn == NULL || 
+		fileSystem->writeFn == NULL || fileSystem->closeFn == NULL || fileSystem->opendirFn == NULL || 
+		fileSystem->readdirFn == NULL || fileSystem->linkFn == NULL || fileSystem->unlinkFn == NULL ||
+		fileSystem->closedirFn == NULL) {
 
 			return -1;
 	}
 
-	int slot = vfsRegisterFS(infos_arquivos);
+	int slot = vfsRegisterFS(fileSystem);
 
 	if(slot == -1) {
 		return -1;
