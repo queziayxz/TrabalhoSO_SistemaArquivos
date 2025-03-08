@@ -15,13 +15,20 @@
 #include "inode.h"
 #include "util.h"
 
+#define INDEX_TOTALBLOCKS 0
+#define INDEX_BLOCKSIZE 4
+#define INDEX_BITMAP 8
 #define ID_INODE_DEFAULT 1
 #define QUANT_NUM_INODES 20
 // #define BLOCK_INODES 1
 
 FSInfo* fileSystem;
 int* emptyBlocks;
-int totalBlocks;
+
+unsigned char* bitMap;
+unsigned int systemBlockSize;
+unsigned int totalBlocks;
+
 
 //Declaracoes globais
 
@@ -38,25 +45,59 @@ int myFSIsIdle (Disk *d) {
 //retorna -1.
 int myFSFormat (Disk *d, unsigned int blockSize) {
 	if(d != NULL) {
-		totalBlocks = diskGetNumSectors(d) / blockSize;
-		char* dataSystem = malloc(512);
-		memset(dataSystem,0,512);
-		snprintf(dataSystem, 512, "id:%c;name:%s;totalBlocks:%d", fileSystem->fsid, fileSystem->fsname, totalBlocks);
-		if(diskWriteSector(d,0,dataSystem) == -1) return -1; //escreve no setor zero as informações do file system
-		free(dataSystem);
+		unsigned char superBlock[DISK_SECTORDATASIZE] = {0};
+		unsigned char aux[DISK_SECTORDATASIZE] = {0};
+		unsigned char clearSectores[DISK_SECTORDATASIZE] = {0};
 
-		char* value = malloc(512);
-		memset(value,0,512);
-		snprintf(value, 512, "0");
-		for(int i = 1; i < diskGetNumSectors(d); i++) {
-			if(diskWriteSector(d,i,value) == -1) return -1; //escreve zero em todos os setores do disco
+		for(int i = 0; i < diskGetNumSectors(d); i++) {
+			if(diskWriteSector(d,i,clearSectores) == -1) return -1;
 		}
-		free(value);
 
-		for(int i = 1; i <= QUANT_NUM_INODES; i++) {
-			if(inodeCreate(i, d) == NULL) return -1; //cria os 20 inodes e armazena no disco
+		totalBlocks = diskGetSize(d) / blockSize;		
+		
+		ul2char(totalBlocks, &superBlock[INDEX_TOTALBLOCKS]);
+		printf("\ntotal block hex: 0x%02X\n", superBlock[INDEX_TOTALBLOCKS]);
+		printf("total block decimal: %d\n", totalBlocks);
+					
+		
+		ul2char(blockSize, &superBlock[INDEX_BLOCKSIZE]);
+		printf("block size hex: 0x%02X\n", superBlock[INDEX_BLOCKSIZE]);
+		printf("block size decimal: %d\n", blockSize);
+		
+		int tamBitMap = (totalBlocks/8);
+		bitMap = malloc(tamBitMap);
+		memset(bitMap,0,tamBitMap);
+		bitMap[0] = 1; //coloca o bloco do super bloco como ocupado
+		memcpy(&superBlock[INDEX_BITMAP], bitMap, tamBitMap); //copia os dados do bitmap pro superblock
+		
+		if(diskWriteSector(d,0,superBlock) == -1) return -1;
+		
+		if(diskReadSector(d,0,aux) == -1) return -1;
+		for(int i = 0; i <= INDEX_BITMAP; i++) {
+			printf("indice: %d: 0x%02X\n", i, aux[i]);
 		}
-		return totalBlocks;
+		
+
+		// if(diskWriteSector(d,0,superBlock) == -1) return -1;
+
+		// char* dataSystem = malloc(512);
+		// memset(dataSystem,0,512);
+		// snprintf(dataSystem, 512, "id:%c;name:%s;totalBlocks:%d", fileSystem->fsid, fileSystem->fsname, totalBlocks);
+		// if(diskWriteSector(d,0,dataSystem) == -1) return -1; //escreve no setor zero as informações do file system
+		// free(dataSystem);
+
+		// char* value = malloc(512);
+		// memset(value,0,512);
+		// snprintf(value, 512, "0");
+		// for(int i = 1; i < diskGetNumSectors(d); i++) {
+		// 	if(diskWriteSector(d,i,value) == -1) return -1; //escreve zero em todos os setores do disco
+		// }
+		// free(value);
+
+		// for(int i = 1; i <= QUANT_NUM_INODES; i++) {
+		// 	if(inodeCreate(i, d) == NULL) return -1; //cria os 20 inodes e armazena no disco
+		// }
+		return 0;
 	}
 	return -1;
 }
