@@ -17,20 +17,32 @@
 
 #define INDEX_TOTALBLOCKS 0
 #define INDEX_BLOCKSIZE 4
-#define INDEX_BITMAP 8
-#define ID_INODE_DEFAULT 1
-#define QUANT_NUM_INODES 20
-// #define BLOCK_INODES 1
+// #define INDEX_TABLEINODES 8
+#define INDEX_INITBLOCKEMPTY 8
+#define INDEX_BITMAP 12
+#define INDEX_BITMAP_INODES 16
+
+#define ID_INODE_DEFAULT 1 
+#define MAX_INODES 1024 // numero maximo de inodes
+#define NUM_BLOCK_INODE 2 //numero de blocos reservados para salvar os inodes
+// #define QUANT_NUM_INODES 20
+// #define SECTOR_INODES 2 //bloco default para começar a armazenar os inodes
 
 FSInfo* fileSystem;
-int* emptyBlocks;
-
+Inode* inodes[MAX_INODES];
 unsigned char* bitMap;
 unsigned int systemBlockSize;
 unsigned int totalBlocks;
 
-
 //Declaracoes globais
+
+//funções privadas
+void _initInode(Disk *d)
+{
+	for(int i = 0; i < MAX_INODES; i++) {
+		inodes[i] = inodeCreate(i,d);
+	}
+}
 
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
@@ -48,21 +60,18 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 		unsigned char superBlock[DISK_SECTORDATASIZE] = {0};
 		unsigned char aux[DISK_SECTORDATASIZE] = {0};
 		unsigned char clearSectores[DISK_SECTORDATASIZE] = {0};
-
+		// unsigned int inodeMapSize = MAX_INODES * INODE_SIZE;
+		
 		for(int i = 0; i < diskGetNumSectors(d); i++) {
 			if(diskWriteSector(d,i,clearSectores) == -1) return -1;
 		}
-
+		
+		//armazena no super bloco o valor total de blocos
 		totalBlocks = diskGetSize(d) / blockSize;		
-		
 		ul2char(totalBlocks, &superBlock[INDEX_TOTALBLOCKS]);
-		printf("\ntotal block hex: 0x%02X\n", superBlock[INDEX_TOTALBLOCKS]);
-		printf("total block decimal: %d\n", totalBlocks);
-					
 		
+		//armazena no super bloco o valor do blocksize
 		ul2char(blockSize, &superBlock[INDEX_BLOCKSIZE]);
-		printf("block size hex: 0x%02X\n", superBlock[INDEX_BLOCKSIZE]);
-		printf("block size decimal: %d\n", blockSize);
 		
 		int tamBitMap = (totalBlocks/8);
 		bitMap = malloc(tamBitMap);
@@ -71,13 +80,14 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 		memcpy(&superBlock[INDEX_BITMAP], bitMap, tamBitMap); //copia os dados do bitmap pro superblock
 		
 		if(diskWriteSector(d,0,superBlock) == -1) return -1;
+	
+		//cria todos os inodes e armazena no disco
+		_initInode(d);
 		
-		if(diskReadSector(d,0,aux) == -1) return -1;
-		for(int i = 0; i <= INDEX_BITMAP; i++) {
+		if(diskReadSector(d,2,aux) == -1) return -1;
+		for(int i = 0; i <= 256; i++) {
 			printf("indice: %d: 0x%02X\n", i, aux[i]);
 		}
-		
-
 		// if(diskWriteSector(d,0,superBlock) == -1) return -1;
 
 		// char* dataSystem = malloc(512);
