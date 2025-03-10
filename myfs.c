@@ -10,39 +10,86 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "myfs.h"
 #include "vfs.h"
 #include "inode.h"
 #include "util.h"
 
-#define INDEX_TOTALBLOCKS 0
-#define INDEX_BLOCKSIZE 4
-// #define INDEX_TABLEINODES 8
-#define INDEX_INITBLOCKEMPTY 8
-#define INDEX_BITMAP 12
-#define INDEX_BITMAP_INODES 16
+#define INDEX_TOTALBLOCKS 0 //index no superbloco para encontrar o total de blocos
+#define INDEX_BLOCKSIZE 4 //index no superbloco para encontrar o tamanho do bloco
+#define INDEX_SECTOR_INIT 8 //index no superbloco para encontrar o setor inicial livre
+#define INDEX_BLOCK_ROOT 12 //index no superbloco para encontrar o block do diretorio root
+#define INDEX_BITMAP 16 //index no superbloco para encontrar o bitmap dos blocos livres
 
 #define ID_INODE_DEFAULT 1 
 #define MAX_INODES 1024 // numero maximo de inodes
-#define NUM_BLOCK_INODE 2 //numero de blocos reservados para salvar os inodes
-// #define QUANT_NUM_INODES 20
-// #define SECTOR_INODES 2 //bloco default para começar a armazenar os inodes
+#define NUM_SECTOR_INIT_INODE 2 //bloco default para começar a armazenar os inodes
+
+#define DIR_RAIZ "/root"
+
+//**************************************************
+// VARIÁVEIS GLOBAIS - CRIADAS PELOS ALUNOS
+//**************************************************
+
 
 FSInfo* fileSystem;
+
+typedef struct diretory {
+	unsigned char* filesname;
+	unsigned int block;
+}Directory;
+
 Inode* inodes[MAX_INODES];
 unsigned char* bitMap;
 unsigned int systemBlockSize;
 unsigned int totalBlocks;
+unsigned int sectorInit;
 
-//Declaracoes globais
+Directory diretoryRoot;
 
-//funções privadas
+//**************************************************
+// FUNÇÕES PRIVADAS - CRIADAS PELOS ALUNOS
+//**************************************************
+
+//função que cria todos os inodes suportados no filesystema
 void _initInode(Disk *d)
 {
-	for(int i = 0; i < MAX_INODES; i++) {
+	for(int i = 1; i <= MAX_INODES; i++) {
 		inodes[i] = inodeCreate(i,d);
+		// if(inodes[i] == NULL) {
+		// 	printf("\n retornou -1 no init inode");
+		// 	return -1;	
+		// } 
 	}
 }
+
+//função que cria o diretório raiz
+//cria um bloco de dados correspondente ao 
+//primeiro bloco livre do disco e salva o inode
+//retorna -1 caso não consiga criar o bloco de dados
+int _createDirRoot()
+{
+	//pega o id do inode default e seta ele como arquivo de diretório
+	inodeSetFileType(inodes[ID_INODE_DEFAULT], 1); // 0 para arquivo regular, 1 para diretório
+	inodeSetRefCount(inodes[ID_INODE_DEFAULT], 0);
+	
+	//cria um novo bloco na lista de blocos do inode
+	int idBlock = inodeAddBlock(inodes[ID_INODE_DEFAULT],ceil(sectorInit/8));
+	if(idBlock == -1) return -1;
+
+	// pega o bloco correspondente ao id do bloco criado
+	diretoryRoot.block =  inodeGetBlockAddr(inodes[ID_INODE_DEFAULT],idBlock); 
+	if(inodeSave(inodes[ID_INODE_DEFAULT]) == -1) return -1;
+
+	return 0;
+
+}
+
+//**************************************************
+// FUNÇÕES PUBLICAS
+//**************************************************
+
 
 //Funcao para verificacao se o sistema de arquivos está ocioso, ou seja,
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
@@ -58,56 +105,48 @@ int myFSIsIdle (Disk *d) {
 int myFSFormat (Disk *d, unsigned int blockSize) {
 	if(d != NULL) {
 		unsigned char superBlock[DISK_SECTORDATASIZE] = {0};
-		unsigned char aux[DISK_SECTORDATASIZE] = {0};
+		// unsigned char aux[DISK_SECTORDATASIZE] = {0};
 		unsigned char clearSectores[DISK_SECTORDATASIZE] = {0};
-		// unsigned int inodeMapSize = MAX_INODES * INODE_SIZE;
 		
+		//limpa os setores
 		for(int i = 0; i < diskGetNumSectors(d); i++) {
 			if(diskWriteSector(d,i,clearSectores) == -1) return -1;
 		}
-		
-		//armazena no super bloco o valor total de blocos
+
+		//armazena o valor total de blocos no super bloco
 		totalBlocks = diskGetSize(d) / blockSize;		
 		ul2char(totalBlocks, &superBlock[INDEX_TOTALBLOCKS]);
 		
-		//armazena no super bloco o valor do blocksize
+		//armazena o valor do blocksize no super bloco 
 		ul2char(blockSize, &superBlock[INDEX_BLOCKSIZE]);
+
+		//calcula quantos setores será necessário para armazenar todos os inodes e qual o primeiro setor livre
+		unsigned int sizeInodeSpace = MAX_INODES/inodeNumInodesPerSector();
+		sectorInit = diskGetNumSectors(d) - ((sizeInodeSpace+NUM_SECTOR_INIT_INODE));
+		ul2char(sectorInit, &superBlock[INDEX_SECTOR_INIT]);
 		
-		int tamBitMap = (totalBlocks/8);
-		bitMap = malloc(tamBitMap);
-		memset(bitMap,0,tamBitMap);
-		bitMap[0] = 1; //coloca o bloco do super bloco como ocupado
-		memcpy(&superBlock[INDEX_BITMAP], bitMap, tamBitMap); //copia os dados do bitmap pro superblock
-		
-		if(diskWriteSector(d,0,superBlock) == -1) return -1;
-	
 		//cria todos os inodes e armazena no disco
 		_initInode(d);
 		
-		if(diskReadSector(d,2,aux) == -1) return -1;
-		for(int i = 0; i <= 256; i++) {
-			printf("indice: %d: 0x%02X\n", i, aux[i]);
-		}
-		// if(diskWriteSector(d,0,superBlock) == -1) return -1;
+		//crio o diretorio raiz e um bloco de dados e armazena no superbloco o bloco do diretorio raiz
+		if(_createDirRoot() == -1) return -1;
+		ul2char(diretoryRoot.block, &superBlock[INDEX_BLOCK_ROOT]);
+		
+		//armazena o bitmap dos blocos livres no superbloco
+		int tamBitMap = (totalBlocks - ((sizeInodeSpace)/(blockSize/512))); //calcula quantos bits serao necessarios para armazenar os blocos livres
+		bitMap = malloc(tamBitMap);
+		memset(bitMap,0,tamBitMap);
+		bitMap[0] = 1; // marca como ocupado o primeiro bloco correspondente ao diretório raiz 
+		memcpy(&superBlock[INDEX_BITMAP], bitMap, tamBitMap); //copia os dados do bitmap pro superblock
+		
+		//escreve no bloco zero o superbloco
+		if(diskWriteSector(d,0,superBlock) == -1) return -1;
 
-		// char* dataSystem = malloc(512);
-		// memset(dataSystem,0,512);
-		// snprintf(dataSystem, 512, "id:%c;name:%s;totalBlocks:%d", fileSystem->fsid, fileSystem->fsname, totalBlocks);
-		// if(diskWriteSector(d,0,dataSystem) == -1) return -1; //escreve no setor zero as informações do file system
-		// free(dataSystem);
-
-		// char* value = malloc(512);
-		// memset(value,0,512);
-		// snprintf(value, 512, "0");
-		// for(int i = 1; i < diskGetNumSectors(d); i++) {
-		// 	if(diskWriteSector(d,i,value) == -1) return -1; //escreve zero em todos os setores do disco
+		// if(diskReadSector(d,0,aux) == -1) return -1;
+		// for(int i = 0; i <= INDEX_SECTOR_INIT+4; i++) {
+		// 	printf("indice: %d: 0x%02X\n", i, aux[i]);
 		// }
-		// free(value);
-
-		// for(int i = 1; i <= QUANT_NUM_INODES; i++) {
-		// 	if(inodeCreate(i, d) == NULL) return -1; //cria os 20 inodes e armazena no disco
-		// }
-		return 0;
+		return totalBlocks > 0 ? totalBlocks : -1;
 	}
 	return -1;
 }
@@ -117,6 +156,7 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 //criando o arquivo se nao existir. Retorna um descritor de arquivo,
 //em caso de sucesso. Retorna -1, caso contrario.
 int myFSOpen (Disk *d, const char *path) {
+	
 	return -1;
 }
 	
