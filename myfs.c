@@ -25,6 +25,8 @@
 #define ID_INODE_DEFAULT 1 
 #define MAX_INODES 1024 // numero maximo de inodes
 #define NUM_SECTOR_INIT_INODE 2 //bloco default para começar a armazenar os inodes
+#define MAX_FILES 1024
+#define MAX_OPEN_FILES 5
 
 #define DIR_RAIZ "/root"
 
@@ -35,10 +37,17 @@
 
 FSInfo* fileSystem;
 
+typedef struct files {
+	Inode* inode;
+	unsigned char* name;
+	unsigned int isOpen; // 0 para aberto, 1 para fechado
+} FileDescriptor;
+
 typedef struct diretory {
-	unsigned char* filesname;
+	unsigned char* filesname[MAX_FILES];
 	unsigned int block;
-}Directory;
+	int contRef;
+} Directory;
 
 Inode* inodes[MAX_INODES];
 unsigned char* bitMap;
@@ -47,6 +56,7 @@ unsigned int totalBlocks;
 unsigned int sectorInit;
 
 Directory diretoryRoot;
+FileDescriptor fileDescriptor[MAX_OPEN_FILES];
 
 //**************************************************
 // FUNÇÕES PRIVADAS - CRIADAS PELOS ALUNOS
@@ -70,9 +80,11 @@ void _initInode(Disk *d)
 //retorna -1 caso não consiga criar o bloco de dados
 int _createDirRoot()
 {
+	diretoryRoot.contRef = 0;
+
 	//pega o id do inode default e seta ele como arquivo de diretório
 	inodeSetFileType(inodes[ID_INODE_DEFAULT], 1); // 0 para arquivo regular, 1 para diretório
-	inodeSetRefCount(inodes[ID_INODE_DEFAULT], 0);
+	inodeSetRefCount(inodes[ID_INODE_DEFAULT], diretoryRoot.contRef);
 	
 	//cria um novo bloco na lista de blocos do inode
 	int idBlock = inodeAddBlock(inodes[ID_INODE_DEFAULT],ceil(sectorInit/8));
@@ -86,6 +98,11 @@ int _createDirRoot()
 
 }
 
+void addDiretoryEntry(Disk* d, unsigned char* filename, Inode* inode)
+{
+
+}
+
 //**************************************************
 // FUNÇÕES PUBLICAS
 //**************************************************
@@ -95,6 +112,15 @@ int _createDirRoot()
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
 //um positivo se ocioso ou, caso contrario, 0.
 int myFSIsIdle (Disk *d) {
+	int contDescriptor = 0;
+	for(int i = 0; i < MAX_OPEN_FILES; i++) {
+		if(fileDescriptor[i].isOpen) {
+			contDescriptor++;
+		}
+	}
+
+	if(contDescriptor != MAX_OPEN_FILES) return 1;
+
 	return 0;
 }
 
