@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 #include "myfs.h"
 #include "vfs.h"
 #include "inode.h"
@@ -19,14 +20,17 @@
 #define INDEX_TOTALBLOCKS 0 //index no superbloco para encontrar o total de blocos
 #define INDEX_BLOCKSIZE 4 //index no superbloco para encontrar o tamanho do bloco
 #define INDEX_SECTOR_INIT 8 //index no superbloco para encontrar o setor inicial livre
-#define INDEX_BLOCK_ROOT 12 //index no superbloco para encontrar o block do diretorio root
-#define INDEX_BITMAP 16 //index no superbloco para encontrar o bitmap dos blocos livres
+#define INDEX_TOTAL_BLOCK_FILE 12 //index no superbloco para encontrar a quantidade de blocos de arquivos
+#define INDEX_BLOCK_ROOT 16 //index no superbloco para encontrar o block do diretorio root
+#define INDEX_BITMAP 20 //index no superbloco para encontrar o bitmap dos blocos livres
 
 #define ID_INODE_DEFAULT 1 
-#define MAX_INODES 1024 // numero maximo de inodes
 #define NUM_SECTOR_INIT_INODE 2 //bloco default para começar a armazenar os inodes
+
+#define MAX_INODES 1024 // numero maximo de inodes
 #define MAX_FILES 1024
-#define MAX_OPEN_FILES 5
+#define MAX_OPEN_FILES 128
+#define MAX_FILE_LENGTH 255
 
 #define DIR_RAIZ "/root"
 
@@ -39,12 +43,18 @@ FSInfo* fileSystem;
 
 typedef struct files {
 	Inode* inode;
-	unsigned char* name;
+	const char* name;
+	unsigned char* descriptor;
 	unsigned int isOpen; // 0 para aberto, 1 para fechado
 } FileDescriptor;
 
+typedef struct directoryFileEntry {
+	char name[MAX_FILE_LENGTH];
+	Inode* inode;
+}DirectoryFileEntry;
+
 typedef struct diretory {
-	unsigned char* filesname[MAX_FILES];
+	DirectoryFileEntry* files[MAX_FILES];
 	unsigned int block;
 	int contRef;
 } Directory;
@@ -54,6 +64,7 @@ unsigned char* bitMap;
 unsigned int systemBlockSize;
 unsigned int totalBlocks;
 unsigned int sectorInit;
+unsigned int* blockRoot;
 
 Directory diretoryRoot;
 FileDescriptor fileDescriptor[MAX_OPEN_FILES];
@@ -61,6 +72,52 @@ FileDescriptor fileDescriptor[MAX_OPEN_FILES];
 //**************************************************
 // FUNÇÕES PRIVADAS - CRIADAS PELOS ALUNOS
 //**************************************************
+
+//função que retorna o numero de um bloco livre no disco
+//retorna o numero de bloco caso encontre
+//se não encontrar nenhum, retorna -1
+int _bitMapGetBlockFree(Disk* d)
+{
+	unsigned char superBlock[DISK_SECTORDATASIZE] = {0};
+	unsigned int* blockFree = malloc(sizeof(unsigned int*));
+	unsigned int tamBitMap = 0;
+	blockRoot = malloc(sizeof(unsigned int*));
+
+	//ler o super bloco do disco
+	diskReadSector(d,0,superBlock);
+	printf("\npassou da leitura do setor\n");
+	
+	//transforma o tamanho do bitmap em int
+	char2ul(&superBlock[INDEX_TOTAL_BLOCK_FILE],&tamBitMap);
+	printf("passou da transformaxao do tam\n");
+	
+	//copia o bitmap do superbloco pra variavel global
+	bitMap = malloc(tamBitMap);
+	memcpy(bitMap, &superBlock[INDEX_BITMAP], tamBitMap);
+	printf("copiou os dados do bitmap\n");
+
+	//procura algum bloco livre, se sim retorna a soma do bloco root mais o i do bitmap
+	for(int i = 0; i < tamBitMap; i++) {
+		char2ul(&superBlock[INDEX_BITMAP+i], blockFree);
+		if(!*blockFree){
+			char2ul(&superBlock[INDEX_BLOCK_ROOT], blockRoot);
+			return *blockRoot+i;
+		} 
+	}
+	return -1;
+}
+
+//função que coloca o bloco dado como ocupado
+void _bitMapSetFreePerBusy(int blockFree)
+{
+	bitMap[blockFree - *blockRoot] = 1; 
+}
+
+//função que coloca o bloco dado como desocupado
+void _bitMapSetBusyPerFree(int blockFree)
+{
+	bitMap[blockFree - *blockRoot] = 0; 
+}
 
 //função que cria todos os inodes suportados no filesystema
 void _initInode(Disk *d)
@@ -74,17 +131,23 @@ void _initInode(Disk *d)
 	}
 }
 
+//inicializa o diretório raiz
+void _initDirRoot(Disk* d)
+{
+	
+}
+
 //função que cria o diretório raiz
 //cria um bloco de dados correspondente ao 
 //primeiro bloco livre do disco e salva o inode
 //retorna -1 caso não consiga criar o bloco de dados
 int _createDirRoot()
 {
-	diretoryRoot.contRef = 0;
+	diretoryRoot.contRef = 0;//(apagar talvez)
 
 	//pega o id do inode default e seta ele como arquivo de diretório
 	inodeSetFileType(inodes[ID_INODE_DEFAULT], 1); // 0 para arquivo regular, 1 para diretório
-	inodeSetRefCount(inodes[ID_INODE_DEFAULT], diretoryRoot.contRef);
+	inodeSetRefCount(inodes[ID_INODE_DEFAULT], diretoryRoot.contRef);//(apagar talvez)
 	
 	//cria um novo bloco na lista de blocos do inode
 	int idBlock = inodeAddBlock(inodes[ID_INODE_DEFAULT],ceil(sectorInit/8));
@@ -98,8 +161,31 @@ int _createDirRoot()
 
 }
 
-void addDiretoryEntry(Disk* d, unsigned char* filename, Inode* inode)
+//função que cria uma nova entrada 
+//no diretório raiz. retorna -1 caso de mal sucedico
+//e 1 caso feito com sucesso
+int _addDiretoryEntry(Disk* d, const char* filename, Inode* inode)
 {
+	unsigned char aux[DISK_SECTORDATASIZE] = {0};
+	unsigned char superblock[DISK_SECTORDATASIZE] = {0};
+	Inode* inodeRoot = inodeLoad(ID_INODE_DEFAULT, d);
+
+	// diskReadSector(d,0,superBlock);
+	// char2ul(&superBlock[INDEX_BLOCK_ROOT], &diretoryRoot.block);
+	
+	if(inodeGetRefCount(inodeRoot) == 0) {
+		diretoryRoot.files[inodeGetRefCount(inodeRoot)] = malloc(sizeof(DirectoryFileEntry));
+	}
+
+	//verifica se o filename ja existe
+	for(int i = 0; i < inodeGetRefCount(inodeRoot); i++) {
+		if(strcmp(diretoryRoot.files[i]->name, filename)) return -1; 
+	}
+	
+	strcpy(diretoryRoot.files[inodeGetRefCount(inodeRoot)]->name, filename);
+	diretoryRoot.files[inodeGetRefCount(inodeRoot)]->inode = inode;
+
+	return 1;
 
 }
 
@@ -159,7 +245,9 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 		ul2char(diretoryRoot.block, &superBlock[INDEX_BLOCK_ROOT]);
 		
 		//armazena o bitmap dos blocos livres no superbloco
-		int tamBitMap = (totalBlocks - ((sizeInodeSpace)/(blockSize/512))); //calcula quantos bits serao necessarios para armazenar os blocos livres
+		int tamBitMap = (totalBlocks - ((sizeInodeSpace)/(blockSize/DISK_SECTORDATASIZE))); //calcula quantos bits serao necessarios para armazenar os blocos livres
+		ul2char(tamBitMap, &superBlock[INDEX_TOTAL_BLOCK_FILE]);
+
 		bitMap = malloc(tamBitMap);
 		memset(bitMap,0,tamBitMap);
 		bitMap[0] = 1; // marca como ocupado o primeiro bloco correspondente ao diretório raiz 
@@ -182,8 +270,55 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 //criando o arquivo se nao existir. Retorna um descritor de arquivo,
 //em caso de sucesso. Retorna -1, caso contrario.
 int myFSOpen (Disk *d, const char *path) {
+	if(d == NULL || path == NULL) return -1;
 	
-	return -1;
+	Inode* inodeRoot = inodeLoad(ID_INODE_DEFAULT, d);
+	unsigned char superBlock[DISK_SECTORDATASIZE] = {0};
+	unsigned char filesname[DISK_SECTORDATASIZE] = {0};
+	unsigned char aux[DISK_SECTORDATASIZE] = {0};
+	int fileIndex = -1;
+	int descriptorIndex = 0;
+
+	for(int i = 0; i < MAX_OPEN_FILES; i++) {
+		if(fileDescriptor[i].isOpen) {
+			descriptorIndex = i;
+		}
+	}
+
+	diskReadSector(d,0,superBlock);
+	char2ul(&superBlock[INDEX_BLOCK_ROOT], &diretoryRoot.block);
+	
+	// diskReadSector(d,diretoryRoot.block*8, &diretoryRoot.files);
+
+	//verifica se o filename ja existe
+	for(int i = 0; i < inodeGetRefCount(inodeRoot); i++) {
+		if(strcmp(diretoryRoot.files[i]->name, path)) {
+			fileDescriptor[descriptorIndex].name = path;
+			fileDescriptor[descriptorIndex].descriptor = "r+"; //abre para leitura e escrita
+			fileDescriptor[descriptorIndex].isOpen = 1;
+			return descriptorIndex;
+		}
+	}
+
+	//pega um inode criado
+	fileDescriptor[descriptorIndex].inode = inodeLoad(inodeFindFreeInode(ID_INODE_DEFAULT,d),d);
+	if(fileDescriptor[descriptorIndex].inode == NULL) return -1;
+	
+	// //pega o numero do bloco livre
+	// int blockFree = _bitMapGetBlockFree(d);
+	// if(blockFree == -1) return -1;
+
+	// // seta o tipo para arquivo regular (0 para arquivo regular e 1 para diretório)
+	// inodeSetFileType(fileDescriptor[descriptorIndex].inode, 0); 
+	// int idBlock = inodeAddBlock(fileDescriptor[descriptorIndex].inode,blockFree); //cria um novo bloco na lista de blocos do inode
+	// if(idBlock == -1) return -1;
+	// _bitMapSetFreePerBusy(blockFree); //coloca o bloco como ocupado
+
+	fileDescriptor[descriptorIndex].name = path;
+	fileDescriptor[descriptorIndex].descriptor = "r+"; //abre para leitura e escrita
+	fileDescriptor[descriptorIndex].isOpen = 1;
+
+	return _addDiretoryEntry(d,path,fileDescriptor[descriptorIndex].inode);
 }
 	
 //Funcao para a leitura de um arquivo, a partir de um descritor de
