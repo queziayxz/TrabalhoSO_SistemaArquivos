@@ -43,7 +43,7 @@ FSInfo* fileSystem;
 
 typedef struct files {
 	Inode* inode;
-	const char* name;
+	char name[MAX_FILE_LENGTH];
 	unsigned char* descriptor;
 	unsigned int isOpen; // 0 para fechado, 1 para aberto
 } FileDescriptor;
@@ -54,7 +54,7 @@ typedef struct directoryFileEntry {
 }DirectoryFileEntry;
 
 typedef struct diretory {
-	DirectoryFileEntry* files[MAX_FILES];
+	DirectoryFileEntry* files;
 	int contRef;
 } Directory;
 
@@ -69,7 +69,7 @@ typedef struct superblock {
 } SuperBlock;
 
 SuperBlock superblock;
-Directory diretoryRoot;
+Directory directory;
 FileDescriptor fileDescriptor[MAX_OPEN_FILES];
 
 //**************************************************
@@ -117,36 +117,50 @@ int _initInode(Disk *d)
 //função que inicializa o diretório raiz
 //lê os valores armazenados no superbloco 
 //e coloca nas variáveis globais. 
-//Tambem le o blockRoot e escreve no diretoryRoot
+//Tambem le o blockRoot e escreve no directory
 int _initDirRoot(Disk* d)
 {
+	printf("etru dir\n");
 	unsigned char diskSuperBlock[DISK_SECTORDATASIZE] = {0};
 	
+	if(!directory.contRef) {
+		printf("alocou files\n");
+		directory.files = malloc(sizeof(DirectoryFileEntry)*MAX_FILES);
+		if(directory.files == NULL) return -1;
+	}
+	
 	if(diskReadSector(d,0,diskSuperBlock) == -1) return -1;
+	printf("leu superblokck\n");
 	
 	char2ul(&diskSuperBlock[INDEX_TOTALBLOCKS], &superblock.totalBlocks);
 	char2ul(&diskSuperBlock[INDEX_BLOCKSIZE], &superblock.blockSize);
 	char2ul(&diskSuperBlock[INDEX_SECTOR_INIT], &superblock.sectorInit);
 	char2ul(&diskSuperBlock[INDEX_SIZE_BITMAP], &superblock.sizeBitMap);
 	char2ul(&diskSuperBlock[INDEX_BLOCK_ROOT], &superblock.blockRoot);
+	printf("transformou dados\n");
 	
 	superblock.bitMap = malloc(superblock.sizeBitMap);
 	memcpy(superblock.bitMap, &diskSuperBlock[INDEX_BITMAP], superblock.sizeBitMap);
+	printf("copiou bitmap\n");
 	
 	superblock.inodeRoot = inodeLoad(ID_INODE_DEFAULT, d);
+	printf("leu inode root\n");
 	
 	unsigned char diskSector[DISK_SECTORDATASIZE * (superblock.blockSize/DISK_SECTORDATASIZE)];
 	memset(diskSector,0,sizeof(diskSector));
+	printf("copiou disk sector\n");
 	
 	for(int i = 0; i < superblock.blockSize/DISK_SECTORDATASIZE; i++) {
 		if(diskReadSector(d,superblock.sectorInit+i,diskSector) == -1) return -1;
 		
 	}
-
-	memcpy(diretoryRoot.files, diskSector, MAX_FILE_LENGTH);
-
+	printf("leu setor\n");
+	
+	memcpy(directory.files, diskSector, MAX_FILE_LENGTH);
+	
+	printf("copiou setor\n");
 	// for(int i = 0; i < 100; i++) {
-	// 	printf("index file %d: 0x%02X\n", i, diretoryRoot.files[i]);
+	// 	printf("index file %d: 0x%02X\n", i, directory.files[i]);
 	// }
 
 	return 0;
@@ -159,11 +173,11 @@ int _initDirRoot(Disk* d)
 //retorna -1 caso não consiga criar o bloco de dados
 int _createDirRoot(Disk* d)
 {
-	diretoryRoot.contRef = 0;//(apagar talvez)
+	directory.contRef = 0;//(apagar talvez)
 
 	//pega o id do inode default e seta ele como arquivo de diretório
 	inodeSetFileType(inodeLoad(ID_INODE_DEFAULT, d), 1); // 0 para arquivo regular, 1 para diretório
-	inodeSetRefCount(inodeLoad(ID_INODE_DEFAULT, d), diretoryRoot.contRef);//(apagar talvez)
+	inodeSetRefCount(inodeLoad(ID_INODE_DEFAULT, d), directory.contRef);//(apagar talvez)
 	
 	//cria um novo bloco na lista de blocos do inode
 	int idBlock = inodeAddBlock(inodeLoad(ID_INODE_DEFAULT, d),ceil(superblock.sectorInit/8));
@@ -182,21 +196,27 @@ int _createDirRoot(Disk* d)
 //e 0 caso feito com sucesso
 int _addDiretoryEntry(Disk* d, const char* filename, Inode* inode)
 {
-	unsigned char aux[DISK_SECTORDATASIZE] = {0};
-
-	if(inodeGetRefCount(superblock.inodeRoot) == 0) {
-		diretoryRoot.files[inodeGetRefCount(superblock.inodeRoot)] = malloc(sizeof(DirectoryFileEntry));
-	} else {
-		//verifica se o filename ja existe
-		for(int i = 0; i < inodeGetRefCount(superblock.inodeRoot); i++) {
-			if(strcmp(diretoryRoot.files[i]->name, filename)) return -1; //ja existe um arquivo com esse nome
-		}
+	// unsigned char aux[MAX_FILE_LENGTH] = {0};
+	printf("value filename: %s\n", filename);
+	printf("contref antes add: %d\n", directory.contRef);
+	
+	for(int i = 0; i < directory.contRef; i++) {
+		if(!strcmp(directory.files[i].name, filename)) return -1; //ja existe um arquivo com esse nome
 	}
-
+	
 	printf("passou if\n");
+	
+	strcpy(directory.files[directory.contRef].name, filename);
+	directory.files[directory.contRef].numInode = inodeGetNumber(inode);
+	printf("name depois de adicionado: %s\n", directory.files[directory.contRef].name);
+	directory.contRef += 1;
 
-	strcpy(diretoryRoot.files[inodeGetRefCount(superblock.inodeRoot)]->name, filename);
-	diretoryRoot.files[inodeGetRefCount(superblock.inodeRoot)]->numInode = inodeGetNumber(inode);
+	// for(int i = 0; i < 100; i++) {
+	// 	printf("teste: %c\n", directory.files[0].name[i]);
+	// }
+	
+	printf("contref depois add: %d\n", directory.contRef);
+	printf("filename depois de adicionado: %s\n", filename);
 
 	return 0;
 
@@ -283,35 +303,49 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 int myFSOpen (Disk *d, const char *path) {
 	if(d == NULL || path == NULL) return -1;
 
-	if(_initDirRoot(d) == -1) return -1;
+	if(superblock.bitMap == NULL) {
+		printf("inicializou root");
+		if(_initDirRoot(d) == -1) return -1;
+	}
+
+	
+	printf("iniciou dir\n");
 	
 	int descriptorIndex = -1;
-
+	int auxVerify = 0; //0 o arquivo não existe, 1 existe
+	
 	for(int i = 0; i < MAX_OPEN_FILES; i++) {
-		printf("open: %d\n", fileDescriptor[i].isOpen);
 		if(!fileDescriptor[i].isOpen) {
 			descriptorIndex = i;
 			break;
 		}
 	}
-	
+
+	//verifica se o arquivo ja está aberto(arrumar)
+	for(int i = 0; i < MAX_OPEN_FILES; i++) {
+		if(!strcmp(fileDescriptor[i].name, path)) return -1;
+	}
+		
 	//verifica se o filename ja existe
-	for(int i = 0; i < inodeGetRefCount(superblock.inodeRoot); i++) {
-		if(strcmp(diretoryRoot.files[i]->name, path)) {
-			fileDescriptor[descriptorIndex].name = path;
-			fileDescriptor[descriptorIndex].descriptor = "r+"; //abre para leitura e escrita
-			fileDescriptor[descriptorIndex].isOpen = 1;
-			return descriptorIndex;
+	for(int i = 0; i < directory.contRef; i++) {
+		printf("name: %s\n", directory.files[i].name);
+		printf("path: %s\n", path);
+		if(!strcmp(directory.files[i].name, path)) {
+			printf("entrou id igual\n");
+			auxVerify = 1;
+			break;
 		}
 	}
 
 	//caso não tenha esse arquivo, então cria
+	if(!auxVerify) {
+		//pega um inode criado
+		fileDescriptor[descriptorIndex].inode = inodeLoad(inodeFindFreeInode(ID_INODE_DEFAULT,d),d);
+		if(fileDescriptor[descriptorIndex].inode == NULL) return -1;
 	
-	//pega um inode criado
-	fileDescriptor[descriptorIndex].inode = inodeLoad(inodeFindFreeInode(ID_INODE_DEFAULT,d),d);
-	if(fileDescriptor[descriptorIndex].inode == NULL) return -1;
-
-	printf("\npegou o inode\n");
+		printf("\npegou o inode\n");
+		if(_addDiretoryEntry(d,path,fileDescriptor[descriptorIndex].inode) == -1) return -1;
+	}
 	
 	
 	// //pega o numero do bloco livre
@@ -324,20 +358,12 @@ int myFSOpen (Disk *d, const char *path) {
 	// if(idBlock == -1) return -1;
 	// _bitMapSetFreePerBusy(blockFree); //coloca o bloco como ocupado
 	
-	fileDescriptor[descriptorIndex].name = path;
+	strcpy(fileDescriptor[descriptorIndex].name, path);
 	fileDescriptor[descriptorIndex].descriptor = "r+"; //abre para leitura e escrita
 	fileDescriptor[descriptorIndex].isOpen = 1;
 	
-	if(_addDiretoryEntry(d,path,fileDescriptor[descriptorIndex].inode) == -1) return -1;
-	
-	// for(int i = 0; i < 100; i++) {
-	// 	printf("filename: %s", diretoryRoot.files[i]);
-	// 	printf("filename2: %c", diretoryRoot.files[i]);
-	// 	printf("filename3: 0x%02X", diretoryRoot.files[i]);
-	// }
+	printf("descripto value: %d\n", descriptorIndex);
 
-	printf("descriptor: %d\n", descriptorIndex);
-	
 	return descriptorIndex+1;
 }
 	
@@ -362,7 +388,7 @@ int myFSWrite (int fd, const char *buf, unsigned int nbytes) {
 int myFSClose (int fd) {
 	if(fd <= 0) return -1;
 
-	fileDescriptor[fd-1].name = "";
+	strcpy(fileDescriptor[fd-1].name, "");
 	fileDescriptor[fd-1].descriptor = "";
 	fileDescriptor[fd-1].inode = NULL;
 	fileDescriptor[fd-1].isOpen = 0;
