@@ -371,8 +371,29 @@ int myFSOpen (Disk *d, const char *path) {
 //arquivo existente. Os dados lidos sao copiados para buf e terao
 //tamanho maximo de nbytes. Retorna o numero de bytes efetivamente
 //lidos em caso de sucesso ou -1, caso contrario.
-int myFSRead (int fd, char *buf, unsigned int nbytes) {
-	return -1;
+int myFSRead(Disk *d, int fd, char *buf, unsigned int nbytes){
+
+	if (fd < 0 || fd >= MAX_OPEN_FILES || buf == NULL){
+		return -1; // parametro invalido
+	}
+
+	if (!fileDescriptor[fd].isOpen){
+		return -1; // arquivo não aberto
+	}
+
+	unsigned long sectorAddr = inodeGetBlockAddr(fileDescriptor[fd].inode, 0);
+	unsigned char sectorData[DISK_SECTORDATASIZE];
+
+	if (d == NULL){
+		return -1; // disco não está montado
+	}
+
+	if (diskReadSector(d, sectorAddr, sectorData) != 0){
+		return -1; // Falha na leitura do setor
+	}
+
+	strncpy(buf, sectorData, nbytes);
+	return nbytes; // Concluído!
 }
 
 //Funcao para a escrita de um arquivo, a partir de um descritor de
