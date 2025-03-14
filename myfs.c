@@ -122,6 +122,7 @@ int _initDirRoot(Disk* d)
 {
 	printf("etru dir\n");
 	unsigned char diskSuperBlock[DISK_SECTORDATASIZE] = {0};
+	char** files;
 	
 	if(!directory.contRef) {
 		printf("alocou files\n");
@@ -146,17 +147,45 @@ int _initDirRoot(Disk* d)
 	superblock.inodeRoot = inodeLoad(ID_INODE_DEFAULT, d);
 	printf("leu inode root\n");
 	
-	unsigned char diskSector[DISK_SECTORDATASIZE * (superblock.blockSize/DISK_SECTORDATASIZE)];
-	memset(diskSector,0,sizeof(diskSector));
+	unsigned char* diskSectorRoot = malloc(DISK_SECTORDATASIZE * (superblock.blockSize/DISK_SECTORDATASIZE));
+	printf("tamanho root: %d\n", DISK_SECTORDATASIZE * (superblock.blockSize/DISK_SECTORDATASIZE));
+	printf("setor init: %d\n", superblock.sectorInit);
+	memset(diskSectorRoot,0,sizeof(diskSectorRoot));
 	printf("copiou disk sector\n");
 	
 	for(int i = 0; i < superblock.blockSize/DISK_SECTORDATASIZE; i++) {
-		if(diskReadSector(d,superblock.sectorInit+i,diskSector) == -1) return -1;
-		
+		printf("setor for: %d\n", superblock.sectorInit-1+i);
+		if(diskReadSector(d,superblock.sectorInit-1+i,diskSectorRoot) == -1) return -1;
 	}
 	printf("leu setor\n");
-	
-	memcpy(directory.files, diskSector, MAX_FILE_LENGTH);
+
+	char* token = strtok(diskSectorRoot, "/");
+	int x = 0;
+	while(token != NULL) {
+		printf("token: %s\n", token);
+		// token = strtok(NULL, "/");
+		unsigned char* numInode = strtok(token, ",");
+		unsigned char* name = strtok(NULL, ",");
+
+		printf("name: %s\n", name);
+		printf("num inode: %s\n", numInode);
+
+		strcpy(directory.files[x].name, name);
+		char2ul(numInode, &directory.files->numInode);
+
+		printf("directory.files[x].name: %s\n", directory.files[x].name);
+		printf("directory.files->numInode: %d\n", directory.files->numInode);
+
+		directory.contRef += 1;
+		x += 1;
+
+		token = strtok(NULL, "/");
+	}
+
+	for(int i = 0; i < directory.contRef; i++) {
+		printf("file %d: %s\n", i, directory.files[i]);
+	}
+	// memcpy(directory.files, diskSectorRoot, MAX_FILE_LENGTH);
 	
 	printf("copiou setor\n");
 	// for(int i = 0; i < 100; i++) {
@@ -198,7 +227,7 @@ int _createDirRoot(Disk* d)
 //e 0 caso feito com sucesso
 int _addDiretoryEntry(Disk* d, const char* filename, Inode* inode)
 {
-	unsigned char aux[DISK_SECTORDATASIZE] = {0};
+	char aux[DISK_SECTORDATASIZE] = {0};
 	unsigned char aux2[DISK_SECTORDATASIZE] = {0};
 	
 	for(int i = 0; i < directory.contRef; i++) {
@@ -210,10 +239,13 @@ int _addDiretoryEntry(Disk* d, const char* filename, Inode* inode)
 	printf("name depois de adicionado: %s\n", directory.files[directory.contRef].name);
 
 	int sizeEntry = snprintf(NULL,0, "%d,%s/", directory.files[directory.contRef].numInode, directory.files[directory.contRef].name);
-	unsigned char* dataEntry = malloc(sizeEntry + 1); // soma mais um pq o snprintf não conta o \0 no final da string
-	for(int i = 0; i < directory.contRef; i++) {
-		sprintf(dataEntry, "%d,%s/", directory.files[directory.contRef].numInode, directory.files[directory.contRef].name);
-		strcat(aux, dataEntry); 
+	for(int i = 0; i <= directory.contRef; i++) {
+		char* dataEntry = malloc(sizeEntry + 1); // soma mais um pq o snprintf não conta o \0 no final da string
+		sprintf(dataEntry, "%d,%s/", directory.files[i].numInode, directory.files[i].name);
+		// asprintf(&dataEntry, "%d,%s/", directory.files[directory.contRef].numInode, directory.files[directory.contRef].name);
+		printf("data entry: %s", dataEntry);
+		strcat(aux, dataEntry);
+		free(dataEntry);
 	}
 	
 	printf("aux: %s\n", aux);
@@ -224,17 +256,17 @@ int _addDiretoryEntry(Disk* d, const char* filename, Inode* inode)
 
 	if(diskWriteSector(d,sectorAdd,aux) == -1) return -1;
 
-	printf("escreveu\n");
-	if(diskReadSector(d,sectorAdd,aux2) == -1) return -1;
+	// printf("escreveu\n");
+	// if(diskReadSector(d,sectorAdd,aux2) == -1) return -1;
 	
-	printf("string lida: %s\n", aux2);
-	// for(int i = 0; i < 10; i++) {
-	// 	printf("leu3\n");
-	// 	printf("teste: 0x%02X\n", aux[i]);
+	// printf("string lida: %s\n", aux2);
+	// // for(int i = 0; i < 10; i++) {
+	// // 	printf("leu3\n");
+	// // 	printf("teste: 0x%02X\n", aux[i]);
 		
-	// }
+	// // }
 
-	// diskGetSize
+	// // diskGetSize
 
 	directory.contRef += 1;
 	
@@ -356,6 +388,7 @@ int myFSOpen (Disk *d, const char *path) {
 	if(!auxVerify) {
 		//pega um inode criado
 		fileDescriptor[descriptorIndex].inode = inodeLoad(inodeFindFreeInode(ID_INODE_DEFAULT,d),d);
+		printf("inode pegado: %s\n", inodeGetNumber(fileDescriptor[descriptorIndex].inode));
 		if(fileDescriptor[descriptorIndex].inode == NULL) return -1;
 	
 		printf("\npegou o inode\n");
@@ -387,27 +420,27 @@ int myFSOpen (Disk *d, const char *path) {
 //tamanho maximo de nbytes. Retorna o numero de bytes efetivamente
 //lidos em caso de sucesso ou -1, caso contrario.
 int myFSRead (int fd, char *buf, unsigned int nbytes) {
-	if (fd < 0 || fd >= MAX_OPEN_FILES || buf == NULL){
-		return -1; // parametro invalido
-	}
+	// if (fd < 0 || fd >= MAX_OPEN_FILES || buf == NULL){
+	// 	return -1; // parametro invalido
+	// }
 
-	if (!fileDescriptor[fd].isOpen){
-		return -1; // arquivo não aberto
-	}
+	// if (!fileDescriptor[fd].isOpen){
+	// 	return -1; // arquivo não aberto
+	// }
 
-	unsigned long sectorAddr = inodeGetBlockAddr(fileDescriptor[fd].inode, 0);
-	unsigned char sectorData[DISK_SECTORDATASIZE];
+	// unsigned long sectorAddr = inodeGetBlockAddr(fileDescriptor[fd].inode, 0);
+	// unsigned char sectorData[DISK_SECTORDATASIZE];
 
-	if (d == NULL){
-		return -1; // disco não está montado
-	}
+	// if (d == NULL){
+	// 	return -1; // disco não está montado
+	// }
 
-	if (diskReadSector(d, sectorAddr, sectorData) != 0){
-		return -1; // Falha na leitura do setor
-	}
+	// if (diskReadSector(d, sectorAddr, sectorData) != 0){
+	// 	return -1; // Falha na leitura do setor
+	// }
 
-	strncpy(buf, sectorData, nbytes);
-	return nbytes; // Concluído!
+	// strncpy(buf, sectorData, nbytes);
+	// return nbytes; // Concluído!
 }
 
 //Funcao para a escrita de um arquivo, a partir de um descritor de
