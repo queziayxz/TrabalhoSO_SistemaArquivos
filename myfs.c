@@ -170,24 +170,26 @@ int _initDirRoot(Disk* d)
 //função que cria o diretório raiz
 //cria um bloco de dados correspondente ao 
 //primeiro bloco livre do disco e salva o inode
-//retorna -1 caso não consiga criar o bloco de dados
+//retorna o numero do bloco caso de sucesso
+//e -1 caso contrário
 int _createDirRoot(Disk* d)
 {
 	directory.contRef = 0;//(apagar talvez)
 
 	//pega o id do inode default e seta ele como arquivo de diretório
 	inodeSetFileType(inodeLoad(ID_INODE_DEFAULT, d), 1); // 0 para arquivo regular, 1 para diretório
-	inodeSetRefCount(inodeLoad(ID_INODE_DEFAULT, d), directory.contRef);//(apagar talvez)
 	
 	//cria um novo bloco na lista de blocos do inode
-	int idBlock = inodeAddBlock(inodeLoad(ID_INODE_DEFAULT, d),ceil(superblock.sectorInit/8));
+	int idBlock = inodeAddBlock(inodeLoad(ID_INODE_DEFAULT, d),0); //colocando o bloco inicial como sendo o zero, tudo o que vem antes está sendo contado somente como setores
+	printf("id do block root: %d\n", idBlock);
 	if(idBlock == -1) return -1;
-
+	
 	// pega o bloco correspondente ao id do bloco criado
-	superblock.blockRoot =  inodeGetBlockAddr(inodeLoad(ID_INODE_DEFAULT, d),idBlock); 
+	unsigned int blockRoot =  inodeGetBlockAddr(inodeLoad(ID_INODE_DEFAULT, d),idBlock); 
+	printf("num do block root: %d\n", superblock.blockRoot);
 	if(inodeSave(inodeLoad(ID_INODE_DEFAULT, d)) == -1) return -1;
 
-	return 0;
+	return blockRoot;
 
 }
 
@@ -196,28 +198,46 @@ int _createDirRoot(Disk* d)
 //e 0 caso feito com sucesso
 int _addDiretoryEntry(Disk* d, const char* filename, Inode* inode)
 {
-	// unsigned char aux[MAX_FILE_LENGTH] = {0};
-	printf("value filename: %s\n", filename);
-	printf("contref antes add: %d\n", directory.contRef);
+	unsigned char aux[DISK_SECTORDATASIZE] = {0};
+	unsigned char aux2[DISK_SECTORDATASIZE] = {0};
 	
 	for(int i = 0; i < directory.contRef; i++) {
 		if(!strcmp(directory.files[i].name, filename)) return -1; //ja existe um arquivo com esse nome
 	}
-	
-	printf("passou if\n");
-	
+		
 	strcpy(directory.files[directory.contRef].name, filename);
 	directory.files[directory.contRef].numInode = inodeGetNumber(inode);
 	printf("name depois de adicionado: %s\n", directory.files[directory.contRef].name);
-	directory.contRef += 1;
 
-	// for(int i = 0; i < 100; i++) {
-	// 	printf("teste: %c\n", directory.files[0].name[i]);
-	// }
+	int sizeEntry = snprintf(NULL,0, "%d,%s/", directory.files[directory.contRef].numInode, directory.files[directory.contRef].name);
+	unsigned char* dataEntry = malloc(sizeEntry + 1); // soma mais um pq o snprintf não conta o \0 no final da string
+	for(int i = 0; i < directory.contRef; i++) {
+		sprintf(dataEntry, "%d,%s/", directory.files[directory.contRef].numInode, directory.files[directory.contRef].name);
+		strcat(aux, dataEntry); 
+	}
 	
-	printf("contref depois add: %d\n", directory.contRef);
-	printf("filename depois de adicionado: %s\n", filename);
+	printf("aux: %s\n", aux);
+	
+	int sectorAdd = (superblock.blockSize/DISK_SECTORDATASIZE)*superblock.blockRoot + superblock.sectorInit;
+	printf("setor add: %d\n", sectorAdd);
 
+
+	if(diskWriteSector(d,sectorAdd,aux) == -1) return -1;
+
+	printf("escreveu\n");
+	if(diskReadSector(d,sectorAdd,aux2) == -1) return -1;
+	
+	printf("string lida: %s\n", aux2);
+	// for(int i = 0; i < 10; i++) {
+	// 	printf("leu3\n");
+	// 	printf("teste: 0x%02X\n", aux[i]);
+		
+	// }
+
+	// diskGetSize
+
+	directory.contRef += 1;
+	
 	return 0;
 
 }
@@ -231,7 +251,6 @@ int _addDiretoryEntry(Disk* d, const char* filename, Inode* inode)
 //se nao ha quisquer descritores de arquivos em uso atualmente. Retorna
 //um positivo se ocioso ou, caso contrario, 0.
 int myFSIsIdle (Disk *d) {
-	int contDescriptor = 0;
 	for(int i = 0; i < MAX_OPEN_FILES; i++) {
 		if(fileDescriptor[i].isOpen) {
 			return 0;
@@ -257,41 +276,38 @@ int myFSFormat (Disk *d, unsigned int blockSize) {
 		}
 
 		//armazena o valor total de blocos no super bloco
-		superblock.totalBlocks = diskGetSize(d) / blockSize;		
-		ul2char(superblock.totalBlocks, &diskSuperBlock[INDEX_TOTALBLOCKS]);
+		unsigned int totalBlocks = diskGetSize(d) / blockSize;
+		ul2char(totalBlocks, &diskSuperBlock[INDEX_TOTALBLOCKS]);
 		
 		//armazena o valor do blocksize no super bloco 
-		superblock.blockSize = blockSize;
-		ul2char(superblock.blockSize, &diskSuperBlock[INDEX_BLOCKSIZE]);
+		ul2char(blockSize, &diskSuperBlock[INDEX_BLOCKSIZE]);
 
 		//calcula quantos setores será necessário para armazenar todos os inodes e qual o primeiro setor livre
-		unsigned int sizeInodeSpace = MAX_INODES/inodeNumInodesPerSector();
-		superblock.sectorInit = diskGetNumSectors(d) - ((sizeInodeSpace+NUM_SECTOR_INIT_INODE));
-		ul2char(superblock.sectorInit, &diskSuperBlock[INDEX_SECTOR_INIT]);
+		unsigned int sizeInodeSpace = MAX_INODES/inodeNumInodesPerSector(); //1024/8 = 128 setores
+		unsigned int sectorInit = sizeInodeSpace+NUM_SECTOR_INIT_INODE; // 128 + 2 = 130
+		ul2char(sectorInit, &diskSuperBlock[INDEX_SECTOR_INIT]);
 		
 		//cria todos os inodes e armazena no disco
 		if(_initInode(d) == -1) return -1;
 		//cria o diretorio raiz e um bloco de dados e armazena no superbloco o bloco do diretorio raiz
-		if(_createDirRoot(d) == -1) return -1;
-		ul2char(superblock.blockRoot, &diskSuperBlock[INDEX_BLOCK_ROOT]);
+		unsigned int blockRoot = _createDirRoot(d);
+		if(blockRoot == -1) return -1;
+		ul2char(blockRoot, &diskSuperBlock[INDEX_BLOCK_ROOT]);
 		
-		//armazena o tamanho bitmap dos blocos livres no superbloco
-		unsigned int tamBitMap = (superblock.totalBlocks - ((sizeInodeSpace)/(superblock.blockSize/DISK_SECTORDATASIZE))); //calcula quantos bits serao necessarios para armazenar os blocos livres
+		//armazena o tamanho bitmap dos blocos livres no superbloco | 256 blocos - 128/(1024/512) = 256 - 64 = 192 blocos
+																			//    128+2/(1024/512) = 256 - 65 = 191 blocos
+		unsigned int tamBitMap = (totalBlocks - ((sizeInodeSpace+NUM_SECTOR_INIT_INODE)/(blockSize/DISK_SECTORDATASIZE))); //calcula quantos bits serao necessarios para armazenar os blocos livres
 		ul2char(tamBitMap, &diskSuperBlock[INDEX_SIZE_BITMAP]);
 		
-		superblock.bitMap = malloc(tamBitMap);
-		memset(superblock.bitMap,0,tamBitMap);
-		superblock.bitMap[0] = 1; // marca como ocupado o primeiro bloco correspondente ao diretório raiz 
-		memcpy(&diskSuperBlock[INDEX_BITMAP], superblock.bitMap, tamBitMap); //copia os dados do bitmap pro superblock
+		unsigned char* bitMap = malloc(tamBitMap);
+		memset(bitMap,0,tamBitMap);
+		bitMap[0] = 1; // marca como ocupado o primeiro bloco correspondente ao diretório raiz 
+		memcpy(&diskSuperBlock[INDEX_BITMAP], bitMap, tamBitMap); //copia os dados do bitmap pro superblock
 		
-		//escreve no bloco zero o superbloco
+		//escreve no setor zero o superbloco
 		if(diskWriteSector(d,0,diskSuperBlock) == -1) return -1;
 		
-		// if(diskReadSector(d,0,aux) == -1) return -1;
-		// for(int i = 0; i <= INDEX_SECTOR_INIT+4; i++) {
-		// 	printf("indice: %d: 0x%02X\n", i, aux[i]);
-		// }
-		return superblock.totalBlocks > 0 ? superblock.totalBlocks : -1;
+		return totalBlocks > 0 ? totalBlocks : -1;
 	}
 	return -1;
 }
@@ -308,7 +324,6 @@ int myFSOpen (Disk *d, const char *path) {
 		if(_initDirRoot(d) == -1) return -1;
 	}
 
-	
 	printf("iniciou dir\n");
 	
 	int descriptorIndex = -1;
@@ -372,6 +387,8 @@ int myFSOpen (Disk *d, const char *path) {
 //tamanho maximo de nbytes. Retorna o numero de bytes efetivamente
 //lidos em caso de sucesso ou -1, caso contrario.
 int myFSRead (int fd, char *buf, unsigned int nbytes) {
+	buf = malloc(nbytes);
+	
 	return -1;
 }
 
