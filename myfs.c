@@ -122,17 +122,17 @@ int _initDirRoot(Disk* d)
 {
 	printf("etru dir\n");
 	unsigned char diskSuperBlock[DISK_SECTORDATASIZE] = {0};
-	char** files;
 	
 	if(!directory.contRef) {
-		printf("alocou files\n");
 		directory.files = malloc(sizeof(DirectoryFileEntry)*MAX_FILES);
 		if(directory.files == NULL) return -1;
 	}
 	
+	//lê o super blooc
 	if(diskReadSector(d,0,diskSuperBlock) == -1) return -1;
 	printf("leu superblokck\n");
 	
+	//passa os valores para as variáveis globais
 	char2ul(&diskSuperBlock[INDEX_TOTALBLOCKS], &superblock.totalBlocks);
 	char2ul(&diskSuperBlock[INDEX_BLOCKSIZE], &superblock.blockSize);
 	char2ul(&diskSuperBlock[INDEX_SECTOR_INIT], &superblock.sectorInit);
@@ -147,50 +147,30 @@ int _initDirRoot(Disk* d)
 	superblock.inodeRoot = inodeLoad(ID_INODE_DEFAULT, d);
 	printf("leu inode root\n");
 	
+	//lê o root
 	unsigned char* diskSectorRoot = malloc(DISK_SECTORDATASIZE * (superblock.blockSize/DISK_SECTORDATASIZE));
-	printf("tamanho root: %d\n", DISK_SECTORDATASIZE * (superblock.blockSize/DISK_SECTORDATASIZE));
-	printf("setor init: %d\n", superblock.sectorInit);
 	memset(diskSectorRoot,0,sizeof(diskSectorRoot));
-	printf("copiou disk sector\n");
 	
 	for(int i = 0; i < superblock.blockSize/DISK_SECTORDATASIZE; i++) {
-		printf("setor for: %d\n", superblock.sectorInit-1+i);
 		if(diskReadSector(d,superblock.sectorInit-1+i,diskSectorRoot) == -1) return -1;
 	}
-	printf("leu setor\n");
 
-	char* token = strtok(diskSectorRoot, "/");
+	//faz o split dos dados lidos e armazena na variável global
+	char* token = strtok(diskSectorRoot, "/,");
 	int x = 0;
-	while(token != NULL) {
-		printf("token: %s\n", token);
-		// token = strtok(NULL, "/");
-		unsigned char* numInode = strtok(token, ",");
-		unsigned char* name = strtok(NULL, ",");
+	while(token != NULL) {		
+		if((*token >= 48) && (*token <= 57)) { // verifica se a string é numérica
+			directory.files[x/2].numInode = *token - '0';
+		} else {
+			strcpy(directory.files[x/2].name, token);
+		}
 
-		printf("name: %s\n", name);
-		printf("num inode: %s\n", numInode);
+		token = strtok(NULL, "/,");
 
-		strcpy(directory.files[x].name, name);
-		char2ul(numInode, &directory.files->numInode);
-
-		printf("directory.files[x].name: %s\n", directory.files[x].name);
-		printf("directory.files->numInode: %d\n", directory.files->numInode);
-
-		directory.contRef += 1;
 		x += 1;
-
-		token = strtok(NULL, "/");
 	}
-
-	for(int i = 0; i < directory.contRef; i++) {
-		printf("file %d: %s\n", i, directory.files[i]);
-	}
-	// memcpy(directory.files, diskSectorRoot, MAX_FILE_LENGTH);
 	
-	printf("copiou setor\n");
-	// for(int i = 0; i < 100; i++) {
-	// 	printf("index file %d: 0x%02X\n", i, directory.files[i]);
-	// }
+	directory.contRef = x/2; // porque o x sempre será o dobro da quantidade de dados no diretorio
 
 	return 0;
 
@@ -410,8 +390,6 @@ int myFSOpen (Disk *d, const char *path) {
 	fileDescriptor[descriptorIndex].descriptor = "r+"; //abre para leitura e escrita
 	fileDescriptor[descriptorIndex].isOpen = 1;
 	
-	printf("descripto value: %d\n", descriptorIndex);
-
 	return descriptorIndex+1;
 }
 	
